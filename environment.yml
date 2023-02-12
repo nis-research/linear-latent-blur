@@ -1,17 +1,23 @@
 name: linear-latent-blur_venv
 channels:
   - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
 dependencies:
+  - pip=22.2.2
+  - pytorch-cuda=11.7
+  - pytorch=1.13.1
+  - torchvision=0.14.1
+  - torchmetrics==0.11.1
   - pip:
+    - tqdm>=4.64.1
     - clean-fid==0.1.35
     - lightning-utilities==0.5.0
     - matplotlib==3.6.2
     - numpy==1.24.1
     - opencv-python==4.6.0.66
     - pandas==1.5.2
-    - Pillow==9.3.0
+    - pillow==9.3.0
     - pytorch-lightning==1.8.6
     - tensorboard==2.11.0
-    - torch==1.13.1
-    - torchmetrics==0.11.0
-    - torchvision==0.14.1
