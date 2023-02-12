@@ -1,3 +1,4 @@
+import logging
 import os
 import pandas as pd
 import cv2
@@ -10,14 +11,20 @@ dataset_dir = "all"
 test_img_cnt = int(DATASET_SIZE * TEST_RATIO)
 val_img_cnt = int(DATASET_SIZE * VALIDATION_RATIO)
 
+logger = logging.getLogger("data_preparation")
+logger.setLevel(logging.DEBUG)
+
+
 def rename_files(dir_name, z_stacks):
     """
-    Renames the files at the path `dir_name/raw`, for each of the subdirectories in `stacks`.
+    Renames the files in the given directory and subdirectories.
+
+    Renames the files at the path `dir_name/raw`, for each of the subdirectories in `z_stacks`.
     :param dir_name: The name of the directory.
     :param z_stacks: The stack-directories in which the files are renamed.
     """
     for directory in [os.path.join(dir_name, ("z" + str(i))) for i in z_stacks]:
-        print(f"Renaming files in {directory}...")
+        logger.info(f"Renaming files in {directory}...")
         for image_name in sorted(os.listdir(directory)):
             if image_name.endswith(".tif"):
                 f_name, f_ext = os.path.splitext(image_name)
@@ -30,17 +37,19 @@ def rename_files(dir_name, z_stacks):
 
 def split_images(dir_name, z_stacks):
     """
+    Creates a train-val-test split from the images in the given directory and subdirectories.
+
     Selects `TEST_RATIO`% images for testing, `VALIDATION_RATIO`% for validation and the remaining for training.
     Moves them to the corresponding directories (train/test/val).
     :param dir_name: the directory where the images are
     :param z_stacks: the z-stacks to be considered
     """
     for directory in [os.path.join(dir_name, ("z" + str(i))) for i in z_stacks]:
-        print(f"Processing images in {directory}...")
+        logger.info(f"Creating TRAIN-VAL-TEST split from directory {directory}...")
         images = sorted(os.listdir(directory))
         for_test = images[:test_img_cnt]
-        for_val = images[test_img_cnt:(test_img_cnt+val_img_cnt)]
-        for_train = images[(test_img_cnt+val_img_cnt):]
+        for_val = images[test_img_cnt:(test_img_cnt + val_img_cnt)]
+        for_train = images[(test_img_cnt + val_img_cnt):]
         _move_images(directory, "test", for_test)
         _move_images(directory, "val", for_val)
         _move_images(directory, "train", for_train)
@@ -54,6 +63,7 @@ def _move_images(original_dir, move_to: str, images):
     :param move_to: to which directory will the images be moved. Options: train/test/val
     :param images: the names of the images to be moved
     """
+    logger.info(f"Moving images to {move_to} directory...")
     for img in images:
         complete_path = os.path.join(original_dir, img)
         path_parts = complete_path.split(os.path.sep)  # all/z0/img_name
@@ -65,13 +75,15 @@ def _move_images(original_dir, move_to: str, images):
 
 def _process_image(image_path):
     """
+    Prepare the TIF-format images for processing.
+
     The image size is 696 x 520 pixels, in 16-bit TIF format, LZW compression.
-    This method reads the image, converts it to 8 bits, applies normalization, resizes it to 128x128 and moves it to
-    a directory of processed images.
+    This method reads the image, converts it to 8 bits, applies normalization, and moves it to a directory of
+    processed images.
     """
     image = cv2.imread(image_path, -1)
     # normalize each pixel between 0 and 1
-    path_parts = image_path.split(os.path.sep)   # train/raw/z0/img_name.tif
+    path_parts = image_path.split(os.path.sep)  # train/raw/z0/img_name.tif
     empty = np.zeros((696, 520))  # each image is 696x520
     image = cv2.normalize(image, empty, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
     image = np.array(image, dtype="uint8")
@@ -79,7 +91,7 @@ def _process_image(image_path):
     # img_resized = cv2.resize(image, dsize=new_sizes, interpolation=cv2.INTER_CUBIC)
     # save the image in the provided directory, in a subdirectory representing the z-stack
     path = os.path.join(path_parts[0], "processed", path_parts[-2], path_parts[-1])
-    os.makedirs(os.path.join(path_parts[0], "processed", path_parts[-2],), exist_ok=True)
+    os.makedirs(os.path.join(path_parts[0], "processed", path_parts[-2]), exist_ok=True)
     cv2.imwrite(path, image)
     return image
 
@@ -91,8 +103,9 @@ def prepare_splits(z_stacks, slide_type, task="train"):
     :param slide_type: the type of slides ("w1" or "w2")
     :param task: for which task are the images selected. Options: train, test, val
     """
-    if task != "train" and task != "test" and task != "val":
-        raise Exception(f"Unknown value for task parameter: {task}.")
+    logger.info(f"Preparing splits for slides {slide_type} and phase {task}.")
+    if task not in ["train", "test", "val"]:
+        raise Exception(f"Unknown value for task parameter: {task}. Must be on of train/test/val.")
     directory_prefix = "z"
     pretrain_ds = []
     for i in z_stacks:
@@ -102,7 +115,7 @@ def prepare_splits(z_stacks, slide_type, task="train"):
     pd.DataFrame(pretrain_ds).to_csv(f"{task}_{slide_type}.csv")
 
 
-def form_triplets(dir_name: str, triplets, slide_type):
+def form_triplets(dir_name: str, triplets, slide_type, deblur=False):
     """
     Creates input triplets for training the network.
     :param dir_name: The directory (train/test/val) from which to choose images
@@ -114,7 +127,7 @@ def form_triplets(dir_name: str, triplets, slide_type):
     triplets_df = pd.DataFrame(columns=["Input1", "Input2", "Target"])
     first_input, second_input, target, alphas = [], [], [], []
     for triplet in triplets:
-        print(f"Processing triplet {triplet}...")
+        logger.info(f"Processing triplet {triplet}...")
         dir_name_1 = os.path.join(dir_name, "raw", directory_prefix + str(triplet[0]))
         dir_name_2 = os.path.join(directory_prefix + str(triplet[1]))
         dir_name_3 = os.path.join(directory_prefix + str(triplet[2]))
@@ -128,18 +141,19 @@ def form_triplets(dir_name: str, triplets, slide_type):
     triplets_df["Input2"] = second_input
     triplets_df["Target"] = target
     triplets_df["Alpha"] = alphas
-    triplets_df.to_csv(f"{dir_name}_{slide_type}.csv")
+    triplets_df.to_csv(f"{dir_name}_deblur_{slide_type}.csv") if deblur else triplets_df.to_csv(f"{dir_name}_{slide_type}.csv")
     return triplets_df
 
 
 if __name__ == "__main__":
 
-    rename_files("all", [*STACKS])
-    split_images("all", [*STACKS])
-
-    triplets_train = [(0, 16, 8, 0.5), (0, 8, 4, 0.6), (8, 16, 12, 0.4), (0, 4, 2, 0.5), (4, 8, 6, 0.5),
+    # rename_files("all", [*STACKS])
+    # split_images("all", [*STACKS])
+    #
+    # # a triplet is of the form: lower_blur_level, higher_blur_level, intermediate_blur_level, interpolation_param
+    triplets_train = [(0, 16, 8, 0.5), (0, 8, 4, 0.5), (8, 16, 12, 0.5), (0, 4, 2, 0.5), (4, 8, 6, 0.5),
                       (8, 12, 10, 0.5), (12, 16, 14, 0.5)]
-    # Prepare train test and validation sets for the w1 and w2 sets of images
+    # Prepare train-test-val sets for the w1 and w2 sets of images
     for mode in ["train", "val", "test"]:
         for slide_type in ["w1", "w2"]:
             prepare_splits(STACKS, slide_type, mode)
@@ -149,16 +163,13 @@ if __name__ == "__main__":
     # triplets_train = [(0, 16, 2, 1/8), (0, 16, 4, 2/8), (0, 16, 6, 3/8), (0, 16, 8, 4/8), (0, 16, 10, 5/8),
     #                   (0, 16, 12, 6/8), (0, 16, 14, 7/8)]
 
-
     # Comment the lines below to generate a test set for deblurring
-    # # For deblurring, fix left input to z-stack0, vary the others from z-stack2 to z-stack14
+    # For deblurring, fix left input to z-stack0, vary the others from z-stack2 to z-stack14
     # triplets_deblur = [(0, 2, 16, 7/8), (0, 4, 16, 6/8), (0, 6, 16, 5/8), (0, 8, 16, 4/8), (0, 10, 16, 3/8),
     #                   (0, 12, 16, 2/8), (0, 14, 16, 1/8)]
     #
     # # x = a * xl + (1-a)*xr =>  xr = 1/(1-a)*x - a/(1-a) xl
     #
-    # for mode in ["train", "val", "test"]:
+    # for mode in ["test"]:
     #     for slide_type in ["w1", "w2"]:
-    #         form_triplets(mode, triplets_deblur, slide_type)
-
-
+    #         form_triplets(mode, triplets_deblur, slide_type, deblur=True)

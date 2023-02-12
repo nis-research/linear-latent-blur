@@ -18,7 +18,7 @@ def get_stats(slide_type):
 class CustomDataset:
 
     def __init__(self, data_csv, training_dir="train", use_ten_crop=True, return_alpha=False,
-                 compute_stats=False, normalize=False):
+                 compute_stats=False, normalize=True):
         self.dir_path = os.path.dirname(os.path.abspath(__file__))
         self.train_df = pd.read_csv(os.path.join(self.dir_path, data_csv), header=0)
         self.train_dir = os.path.join(self.dir_path, training_dir, "processed")
@@ -157,7 +157,7 @@ class PretrainDataModule(pl.LightningDataModule):
 
 class TrainDataModule(pl.LightningDataModule):
 
-    def __init__(self, batch_size, slide_type: str, normalize=False, use_ten_crop=True):
+    def __init__(self, batch_size, slide_type: str, normalize=True, use_ten_crop=True):
         super().__init__()
         self.batch_size = batch_size
         self.slide_type = slide_type
@@ -176,17 +176,17 @@ class TrainDataModule(pl.LightningDataModule):
         pass
 
     def train_dataloader(self):
-        return DataLoader(self.train_ds, shuffle=True, batch_size=self.batch_size, num_workers=1,
+        return DataLoader(self.train_ds, shuffle=True, batch_size=self.batch_size, num_workers=8,
                           pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_ds, shuffle=True, batch_size=self.batch_size, num_workers=1)
+        return DataLoader(self.val_ds, shuffle=False, batch_size=self.batch_size, num_workers=8)
 
     def test_dataloader(self):
-        return DataLoader(self.test_ds, shuffle=False, batch_size=self.batch_size, num_workers=1)
+        return DataLoader(self.test_ds, shuffle=False, batch_size=1, num_workers=8)
 
 
-def input_for_visualization(slide_type, normalize=False):
+def input_for_visualization(slide_type, normalize=True):
     """
     Returns sets of 9 images, where each set containes a transition from z0 to z16 for one of the images in the
     `images` list.

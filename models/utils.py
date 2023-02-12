@@ -1,8 +1,10 @@
 import torch
 import os
+
+import torchvision.utils
 from torchvision.utils import save_image
 from sklearn.decomposition import PCA
-from config import TRANSITION_LENGTH, STD_W1, MEAN_W1, MEAN_W2, STD_W2
+from config import TRANSITION_LENGTH, STD_W1, MEAN_W1, MEAN_W2, STD_W2, NORMALIZE_IMAGES
 
 
 def merge_batch_crops(images):
@@ -67,7 +69,11 @@ def denormalize_image(image, experiment_name):
     :param experiment_name: the experiment_name.
     :return: the denormalized image.
     """
-    return image * STD_W1 + MEAN_W1 if "w1" in experiment_name else image * STD_W2 + MEAN_W2
+    low = float(image.min())
+    high = float(image.max())
+    image.clamp_(min=low, max=high)
+    return image.sub_(low).div_(max(high - low, 1e-5))
+    # return image * STD_W1 + MEAN_W1 if "w1" in experiment_name else image * STD_W2 + MEAN_W2
 
 
 def create_img_folder(reconstructions, exp_name, slide_type, interpolated=False):
@@ -84,6 +90,7 @@ def create_img_folder(reconstructions, exp_name, slide_type, interpolated=False)
         dir_name = f"{exp_name}-original"
     os.makedirs(os.path.join(f"{slide_type}-experiments", exp_name, dir_name), exist_ok=True)
     for idx, reconstr in enumerate(reconstructions):
+        reconstr = reconstr if not NORMALIZE_IMAGES else denormalize_image(reconstr, exp_name)
         save_image(reconstr, os.path.join(f"{slide_type}-experiments", exp_name, dir_name, f"{idx}.png"))
 
 

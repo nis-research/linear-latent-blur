@@ -1,31 +1,34 @@
 import os
-import sys
 import argparse
 import torch.nn
 import torch.nn as nn
 from models.config import NORMALIZE_IMAGES, USE_TEN_CROP, INPUT_CHANNELS, MAX_EPOCHS, TRANSITION_LENGTH, LEARNING_RATE, \
     LAYERS_DEPTH
-from utils import prepare_batch
+from utils import prepare_batch, denormalize_image
 import pytorch_lightning as pl
 from torch import optim
 import torch.nn.functional as F
 from torchvision.utils import save_image
 from dataset import datasetModules as ds
 from visualizations import create_transition_directories
+from torch.utils.tensorboard import SummaryWriter
 
 
 class AE(pl.LightningModule):
-
     """
     The architecture is a slightly modified version of the model at
     https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py, distributed through the Apache License 2.0.
     """
 
-    def __init__(self, in_channels=INPUT_CHANNELS, hidden_dims=None, model_type="baseline", pretrain=False) -> None:
+    def __init__(self, experiment_name="weak_w1", in_channels=INPUT_CHANNELS, hidden_dims=None, model_type="baseline",
+                 pretrain=False) -> None:
 
         super().__init__()
         self.model_type = model_type
         self.pretrain = pretrain
+        os.makedirs(os.path.join(f"tensorboardLogger/{experiment_name}"), exist_ok=True)
+        self.writer = SummaryWriter(os.path.join(f"tensorboardLogger/{experiment_name}"))
+        self.epoch_idx = 0
 
         modules = []
         if hidden_dims is None:
@@ -75,7 +78,7 @@ class AE(pl.LightningModule):
             nn.LeakyReLU(),
             nn.Conv2d(hidden_dims[-1], out_channels=INPUT_CHANNELS,
                       kernel_size=3, padding=1),
-            nn.Sigmoid())
+            nn.Tanh() if NORMALIZE_IMAGES else nn.Sigmoid())
 
     def encode_decode(self, input):
         """
@@ -123,10 +126,10 @@ class AE(pl.LightningModule):
         # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
         #                                                  mode='min',
         #                                                  factor=0.5,
-        #                                                  patience=20,
+        #                                                  patience=3,
         #                                                  min_lr=5e-5)
         # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
-        return {"optimizer": optimizer}  # , "lr_scheduler": scheduler}
+        return {"optimizer": optimizer}  # , "lr_scheduler": scheduler, "monitor": "val_loss"}
 
     def training_step(self, batch, batch_idx):
         loss = self._get_loss(batch)
@@ -136,10 +139,30 @@ class AE(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss = self._get_loss(batch)
         self.log('val_loss', loss)
+        return {'val_loss': loss.detach()}
+
+    def training_epoch_end(self, outputs) -> None:
+        batch_losses = [x["loss"] for x in outputs]
+        epoch_loss = torch.stack(batch_losses).mean()
+        self.writer.add_scalar('training_loss',
+                               epoch_loss,
+                               global_step=self.epoch_idx + 1)
+        print(f"Train epoch loss - {epoch_loss.item()}")
+
+    def validation_epoch_end(self, outputs):
+        batch_losses = [x['val_loss'] for x in outputs]
+        epoch_loss = torch.stack(batch_losses).mean()
+        self.writer.add_scalar('validation_loss',
+                               epoch_loss,
+                               global_step=self.epoch_idx + 1)
+        self.epoch_idx += 1
+        print(f"Validation epoch loss - {epoch_loss.item()}")
+        return {'epoch_val_loss': epoch_loss.item()}
 
     def test_step(self, batch, batch_idx):
         loss = self._get_loss(batch)
         self.log('test_loss', loss)
+        return loss.detach()
 
 
 class TransitionCallback(pl.Callback):
@@ -147,13 +170,15 @@ class TransitionCallback(pl.Callback):
     Callback used to print a transition from z-stack0 to z-stack16 of reconstructed images from interpolated latent
     representations.
     """
-    def __init__(self, input_left, input_right, target, steps, experiment_name, every_n_epochs=2):
+
+    def __init__(self, input_left, input_right, target, steps, experiment_name, slide_type, every_n_epochs=2):
         self.step = 1 / (steps + 1)  # by how much the interpolation parameter increases after each interpolation step
         self.input_left = input_left
         self.input_right = input_right
         self.every_n_epochs = every_n_epochs
         self.target = target
         self.experiment_name = experiment_name
+        self.save_path = os.path.join(f"{slide_type}-experiments", experiment_name)
 
     def on_train_epoch_end(self, trainer, pl_module):
         if trainer.current_epoch % self.every_n_epochs == 0:
@@ -167,21 +192,21 @@ class TransitionCallback(pl.Callback):
                 enc_right, dec_right = pl_module.encode_decode(input_right)
                 alpha = self.step
                 for i, img in enumerate(dec_left):
-                    # img = denormalize_image(img, self.experiment_name)
-                    save_image(img, os.path.join(f"transition-{self.experiment_name}-{i}",
+                    img = denormalize_image(img, self.experiment_name) if NORMALIZE_IMAGES else img
+                    save_image(img, os.path.join(self.save_path, f"transition-{self.experiment_name}-{i}",
                                                  f"z0_epoch_{trainer.current_epoch}.png"))
                 while alpha < 1:
-                    interp = (1-alpha) * (enc_left) + alpha * (enc_right)
+                    interp = (1 - alpha) * (enc_left) + alpha * (enc_right)
                     interp_dec = pl_module.decode(interp)
                     for i, img in enumerate(interp_dec):
-                        # img = denormalize_image(img, self.experiment_name)
-                        save_image(img, os.path.join(f"transition-{self.experiment_name}-{i}",
+                        img = denormalize_image(img, self.experiment_name) if NORMALIZE_IMAGES else img
+                        save_image(img, os.path.join(self.save_path, f"transition-{self.experiment_name}-{i}",
                                                      f"z{int(16 * alpha)}_epoch_{trainer.current_epoch}.png"))
                     alpha += self.step
                 pl_module.train()
             for i, img in enumerate(dec_right):
-                # img = denormalize_image(img, self.experiment_name)
-                save_image(img, os.path.join(f"transition-{self.experiment_name}-{i}",
+                img = denormalize_image(img, self.experiment_name) if NORMALIZE_IMAGES else img
+                save_image(img, os.path.join(self.save_path, f"transition-{self.experiment_name}-{i}",
                                              f"z16_epoch_{trainer.current_epoch}.png"))
 
 
@@ -189,6 +214,7 @@ class SaveEncodingsCallback(pl.Callback):
     """
     Callback used to save the latent representations for some test images, once every `n` epochs.
     """
+
     def __init__(self, images, every_n_epochs, experiment_name):
         super(SaveEncodingsCallback, self).__init__()
         self.images = images
@@ -214,40 +240,49 @@ def train(experiment_name=None, hidden_dims=None, model_type="baseline", slide_t
     # Ensure that all operations are deterministic on GPU (if used) for reproducibility
     torch.backends.cudnn.determinstic = True
     torch.backends.cudnn.benchmark = False
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
     print("Device:", device)
 
     if pretrain:
-        unet = AE(INPUT_CHANNELS, hidden_dims, model_type, True)
+        unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type, True)
         datamodule = ds.PretrainDataModule(batch_size=2, slide_type=slide_type)
     else:
-        unet = AE(INPUT_CHANNELS, hidden_dims, model_type)
+        unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type)
         datamodule = ds.TrainDataModule(batch_size=1, slide_type=slide_type, normalize=NORMALIZE_IMAGES,
                                         use_ten_crop=USE_TEN_CROP)
 
     images = ds.input_for_visualization(slide_type)
     # create a directory with a transition from z0 to z16 of the original images
-    create_transition_directories(experiment_name, images)
+    create_transition_directories(experiment_name, images, slide_type)
 
-    trainer = pl.Trainer(deterministic=True, max_epochs=MAX_EPOCHS, log_every_n_steps=10,  # accumulate_grad_batches=8,
-                         gpus=[0], precision=16, #strategy='ddp',
+    trainer = pl.Trainer(deterministic=True, max_epochs=MAX_EPOCHS, log_every_n_steps=10, accumulate_grad_batches=16,
+                         accelerator="mps", devices=1, precision=16, default_root_dir=os.path.join("checkpoints"),
                          callbacks=[TransitionCallback(input_left=images[0], input_right=images[-1], target=images[2],
-                                                       steps=TRANSITION_LENGTH-2, experiment_name=experiment_name)])
+                                                       steps=TRANSITION_LENGTH - 2, experiment_name=experiment_name,
+                                                       slide_type=slide_type)])
     if torch.cuda.is_available():
         unet = unet.to(device)
     trainer.fit(unet, datamodule=datamodule)
+    unet.writer.flush()
+    unet.writer.close()
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-experiment", required=True, help="The name of the experiment.")
-    parser.add_argument("--model-type", required=True, choices=["baseline", "weak", "strong"],
-                        help="The model type describes the type of loss that will be used.")
-    parser.add_argument("--slide-type", required=True, choices=["w1", "w2"],
-                        help="With which type of slides (w1 or w2) will the model be trained?")
-
-    args = parser.parse_args()
-
-    # Remember to write down for each experiment the vnum, last epoch and last step (needed for the testing part)
-    train(args.experiment, LAYERS_DEPTH, args.model_type, args.slide_type)
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("-experiment", required=True, help="The name of the experiment.")
+    # parser.add_argument("--model-type", required=True, choices=["baseline", "weak", "strong"],
+    #                     help="The model type describes the type of loss that will be used.")
+    # parser.add_argument("--slide-type", required=True, choices=["w1", "w2"],
+    #                     help="With which type of slides (w1 or w2) will the model be trained?")
+    #
+    # args = parser.parse_args()
+    #
+    # # Remember to write down for each experiment the vnum, last epoch and last step (needed for the testing part)
+    # train(args.experiment, LAYERS_DEPTH, args.model_type, args.slide_type)
+    # train("baseline_w1", LAYERS_DEPTH, "baseline", "w1")  # v_num 0
+    # train("weak_w1", LAYERS_DEPTH, "weak", "w1")  # v_num1
+    # train("strong_w1", LAYERS_DEPTH, "strong", "w1")  # v_num2
+    train("baseline_norm_w1", LAYERS_DEPTH, "baseline", "w1")  # v_num3
+    # train("baseline_e2", LAYERS_DEPTH, "baseline", "w2")
+    # train("weak_w2", LAYERS_DEPTH, "weak", "w2")
+    # train("strong_w2", LAYERS_DEPTH, "strong", "w2")
