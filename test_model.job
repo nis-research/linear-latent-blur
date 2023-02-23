@@ -1,0 +1,30 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu
+#SBARCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --job-name=experiment_strong_w1
+#SBATCH --time=1:30:00
+#SBATCH --output=slurm_output_%A.out
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=ioana.mazilu@student.uva.nl
+
+module load 2022
+module load Anaconda3/2022.05
+
+mkdir -p "$TMPDIR"/dataset/train/
+mkdir -p "$TMPDIR"/dataset/test/
+mkdir -p "$TMPDIR"/dataset/val/
+cd $HOME/defocus_blur/dataset
+cp -r train/processed/ "$TMPDIR"/dataset/train/
+cp -r test/processed/ "$TMPDIR"/dataset/test/
+cp -r val/processed/ "$TMPDIR"/dataset/val/
+cd $HOME/defocus_blur/models
+source activate defocus_blur_venv
+python model.py --input-path "$TMPDIR"
+conda deactivate
+
+
+
+
+

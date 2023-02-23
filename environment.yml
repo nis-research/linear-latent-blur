@@ -1,4 +1,3 @@
-name: linear-latent-blur_venv
 channels:
   - conda-forge
   - pytorch

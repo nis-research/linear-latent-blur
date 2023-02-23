@@ -2,16 +2,19 @@ import os
 import argparse
 import torch.nn
 import torch.nn as nn
-from models.config import NORMALIZE_IMAGES, USE_TEN_CROP, INPUT_CHANNELS, MAX_EPOCHS, TRANSITION_LENGTH, LEARNING_RATE, \
+from config import NORMALIZE_IMAGES, USE_TEN_CROP, INPUT_CHANNELS, MAX_EPOCHS, TRANSITION_LENGTH, LEARNING_RATE, \
     LAYERS_DEPTH
-from utils import prepare_batch, denormalize_image
+# from models.test import init_logger, compute_metrics, test
+from utils import prepare_batch, denormalize_image, init_logger
 import pytorch_lightning as pl
 from torch import optim
 import torch.nn.functional as F
 from torchvision.utils import save_image
+import sys
+sys.path.append("/gpfs/home3/imazilu/defocus_blur/")
 from dataset import datasetModules as ds
 from visualizations import create_transition_directories
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 
 class AE(pl.LightningModule):
@@ -26,8 +29,8 @@ class AE(pl.LightningModule):
         super().__init__()
         self.model_type = model_type
         self.pretrain = pretrain
-        os.makedirs(os.path.join(f"tensorboardLogger/{experiment_name}"), exist_ok=True)
-        self.writer = SummaryWriter(os.path.join(f"tensorboardLogger/{experiment_name}"))
+        # os.makedirs(os.path.join(f"tensorboardLogger/{experiment_name}"), exist_ok=True)
+        # self.writer = SummaryWriter(os.path.join(f"tensorboardLogger/{experiment_name}"))
         self.epoch_idx = 0
 
         modules = []
@@ -79,6 +82,9 @@ class AE(pl.LightningModule):
             nn.Conv2d(hidden_dims[-1], out_channels=INPUT_CHANNELS,
                       kernel_size=3, padding=1),
             nn.Tanh() if NORMALIZE_IMAGES else nn.Sigmoid())
+
+    def set_model_type(self, model_type):
+        self.model_type = model_type
 
     def encode_decode(self, input):
         """
@@ -144,18 +150,18 @@ class AE(pl.LightningModule):
     def training_epoch_end(self, outputs) -> None:
         batch_losses = [x["loss"] for x in outputs]
         epoch_loss = torch.stack(batch_losses).mean()
-        self.writer.add_scalar('training_loss',
-                               epoch_loss,
-                               global_step=self.epoch_idx + 1)
+        # self.writer.add_scalar('training_loss',
+        #                        epoch_loss,
+        #                        global_step=self.epoch_idx + 1)
         print(f"Train epoch loss - {epoch_loss.item()}")
 
     def validation_epoch_end(self, outputs):
         batch_losses = [x['val_loss'] for x in outputs]
         epoch_loss = torch.stack(batch_losses).mean()
-        self.writer.add_scalar('validation_loss',
-                               epoch_loss,
-                               global_step=self.epoch_idx + 1)
-        self.epoch_idx += 1
+        # self.writer.add_scalar('validation_loss',
+        #                        epoch_loss,
+        #                        global_step=self.epoch_idx + 1)
+        # self.epoch_idx += 1
         print(f"Validation epoch loss - {epoch_loss.item()}")
         return {'epoch_val_loss': epoch_loss.item()}
 
@@ -171,7 +177,7 @@ class TransitionCallback(pl.Callback):
     representations.
     """
 
-    def __init__(self, input_left, input_right, target, steps, experiment_name, slide_type, every_n_epochs=2):
+    def __init__(self, input_left, input_right, target, steps, experiment_name, slide_type, every_n_epochs=10):
         self.step = 1 / (steps + 1)  # by how much the interpolation parameter increases after each interpolation step
         self.input_left = input_left
         self.input_right = input_right
@@ -233,56 +239,77 @@ class SaveEncodingsCallback(pl.Callback):
                 pl_module.train()
 
 
-def train(experiment_name=None, hidden_dims=None, model_type="baseline", slide_type=None, pretrain=False):
+def train(experiment_name=None, hidden_dims=None, model_type="baseline", slide_type=None, input_path="", pretrain=False):
     assert model_type in ["baseline", "weak", "strong"]
     assert slide_type in ["w1", "w2"]
     pl.seed_everything(42)
+    logger = init_logger(experiment_name)
+    print(experiment_name)
+    print(slide_type)
     # Ensure that all operations are deterministic on GPU (if used) for reproducibility
-    torch.backends.cudnn.determinstic = True
-    torch.backends.cudnn.benchmark = False
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-    print("Device:", device)
+    try:
+        torch.backends.cudnn.determinstic = True
+        torch.backends.cudnn.benchmark = False
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        logger.info(f"Device: {device}")
+        os.makedirs("checkpoints", exist_ok=True)
+        if pretrain:
+            unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type, True)
+            datamodule = ds.PretrainDataModule(batch_size=2, slide_type=slide_type)
+        else:
+            unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type)
+            datamodule = ds.TrainDataModule(batch_size=1, slide_type=slide_type, normalize=NORMALIZE_IMAGES,
+                                            use_ten_crop=USE_TEN_CROP, input_path=input_path)
 
-    if pretrain:
-        unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type, True)
-        datamodule = ds.PretrainDataModule(batch_size=2, slide_type=slide_type)
-    else:
-        unet = AE(experiment_name, INPUT_CHANNELS, hidden_dims, model_type)
-        datamodule = ds.TrainDataModule(batch_size=1, slide_type=slide_type, normalize=NORMALIZE_IMAGES,
-                                        use_ten_crop=USE_TEN_CROP)
+        images = ds.input_for_visualization(slide_type, input_path=input_path)
+        # create a directory with a transition from z0 to z16 of the original images
+        create_transition_directories(experiment_name, images, slide_type)
 
-    images = ds.input_for_visualization(slide_type)
-    # create a directory with a transition from z0 to z16 of the original images
-    create_transition_directories(experiment_name, images, slide_type)
+        # trainer = pl.Trainer(deterministic=True, max_epochs=MAX_EPOCHS, log_every_n_steps=10, accumulate_grad_batches=16,
+        #                      accelerator="mps", devices=1, precision=16, default_root_dir=os.path.join("checkpoints"),
+        #                      callbacks=[TransitionCallback(input_left=images[0], input_right=images[-1], target=images[2],
+        #                                                    steps=TRANSITION_LENGTH - 2, experiment_name=experiment_name,
+        #                                                    slide_type=slide_type)])
 
-    trainer = pl.Trainer(deterministic=True, max_epochs=MAX_EPOCHS, log_every_n_steps=10, accumulate_grad_batches=16,
-                         accelerator="mps", devices=1, precision=16, default_root_dir=os.path.join("checkpoints"),
-                         callbacks=[TransitionCallback(input_left=images[0], input_right=images[-1], target=images[2],
-                                                       steps=TRANSITION_LENGTH - 2, experiment_name=experiment_name,
-                                                       slide_type=slide_type)])
-    if torch.cuda.is_available():
-        unet = unet.to(device)
-    trainer.fit(unet, datamodule=datamodule)
-    unet.writer.flush()
-    unet.writer.close()
+        trainer = pl.Trainer(deterministic=True, max_epochs=MAX_EPOCHS, log_every_n_steps=10, accumulate_grad_batches=16,
+                             accelerator="gpu", gpus=1, devices=1, precision=16, default_root_dir=os.path.join("checkpoints"),
+                             callbacks=[TransitionCallback(input_left=images[0], input_right=images[-1], target=images[2],
+                                                           steps=TRANSITION_LENGTH - 2, experiment_name=experiment_name,
+                                                           slide_type=slide_type)])
+
+        if torch.cuda.is_available():
+            unet = unet.to(device)
+        trainer.fit(unet, datamodule=datamodule)
+    except:
+        logger.error("Error: \n", exc_info=True)
+        raise
+    # unet.writer.flush()
+    # unet.writer.close()
+    #
+    # run_version = sorted(os.listdir(os.path.join("checkpoints", "lightning_logs")))[0]
+    # checkpoint_path = os.path.join("checkpoints", "lightning_logs", run_version, "checkpoints")
+    # logger = init_logger(slide_type, experiment_name)
+    # compute_metrics(experiment_name, slide_type, logger, model_type, checkpoint_dir=checkpoint_path)
+    # test(experiment_name, slide_type)
 
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
     # parser.add_argument("-experiment", required=True, help="The name of the experiment.")
     # parser.add_argument("--model-type", required=True, choices=["baseline", "weak", "strong"],
     #                     help="The model type describes the type of loss that will be used.")
     # parser.add_argument("--slide-type", required=True, choices=["w1", "w2"],
     #                     help="With which type of slides (w1 or w2) will the model be trained?")
-    #
-    # args = parser.parse_args()
+    parser.add_argument("--input-path", required=True, help="Path to directory where train/test/val sets are located.")
+
+    args = parser.parse_args()
     #
     # # Remember to write down for each experiment the vnum, last epoch and last step (needed for the testing part)
-    # train(args.experiment, LAYERS_DEPTH, args.model_type, args.slide_type)
+    train("w1-indirect-reg", LAYERS_DEPTH, "strong", "w1", args.input_path)
     # train("baseline_w1", LAYERS_DEPTH, "baseline", "w1")  # v_num 0
     # train("weak_w1", LAYERS_DEPTH, "weak", "w1")  # v_num1
     # train("strong_w1", LAYERS_DEPTH, "strong", "w1")  # v_num2
-    train("baseline_norm_w1", LAYERS_DEPTH, "baseline", "w1")  # v_num3
+    # train("baseline_w1", LAYERS_DEPTH, "baseline", "w1")  # v_num3
     # train("baseline_e2", LAYERS_DEPTH, "baseline", "w2")
     # train("weak_w2", LAYERS_DEPTH, "weak", "w2")
     # train("strong_w2", LAYERS_DEPTH, "strong", "w2")

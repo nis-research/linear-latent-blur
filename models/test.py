@@ -2,7 +2,6 @@ import argparse
 import logging
 
 import torch.nn
-
 from models.config import USE_TEN_CROP_TESTING
 from models.model import AE
 import pytorch_lightning as pl
@@ -23,6 +22,7 @@ from cleanfid import fid
 def init_logger(slide_type, experiment_name):
     test_logger = logging.getLogger("test_logger")
     test_logger.setLevel(logging.DEBUG)
+    os.makedirs(os.path.join(f"{slide_type}-experiments", experiment_name), exist_ok=True)
     f_handler = logging.FileHandler(os.path.join(f"{slide_type}-experiments", experiment_name, f"{experiment_name}.log"))
     f_handler.setLevel(logging.DEBUG)
     stdout_handler = logging.StreamHandler()
@@ -95,37 +95,40 @@ def perform_deblurring(ae, experiment_name, slide_type):
     return deblurred_imgs, target_reconstructed, target_imgs
 
 
-def compute_metrics(experiment_name, slide_type, logger, vnum=None, epoch=None, step=None):
+def compute_metrics(experiment_name, slide_type, logger, model_type, checkpoint_dir=None, vnum=None, epoch=None, step=None):
     logger.info(f"Computing evaluation metrics for experiment {experiment_name}.")
     assert slide_type in ["w1", "w2"]
-    dir_path = os.path.dirname(os.path.abspath(__file__))
+    assert model_type in ["baseline", "weak", "strong"]
+    # dir_path = os.path.dirname(os.path.abspath(__file__))
     images_gt, _, _ = ds.test_images(slide_type=slide_type)
     os.makedirs(os.path.join(f"{slide_type}-experiments", experiment_name), exist_ok=True)
     with torch.no_grad():
         try:
             latent_codes = torch.load(os.path.join(f"{slide_type}-experiments", experiment_name,
-                                                   f"latent_codes_{experiment_name}.pt"), map_location="cpu")
+                                                   f"latent_codes_{experiment_name}.pt"))
             reconstructed_images = torch.load(os.path.join(f"{slide_type}-experiments", experiment_name,
-                                                           f"reconstructed_blur_{experiment_name}.pt"),
-                                              map_location="cpu")
+                                                           f"reconstructed_blur_{experiment_name}.pt"))
             generated_images = torch.load(os.path.join(f"{slide_type}-experiments", experiment_name,
-                                                       f"synthesised_blur_{experiment_name}.pt"), map_location="cpu")
+                                                       f"synthesised_blur_{experiment_name}.pt"))
             sharp_generated = torch.load(os.path.join(f"{slide_type}-experiments", experiment_name,
-                                                      f"generated_sharp_{experiment_name}.pt"), map_location="cpu")
+                                                      f"generated_sharp_{experiment_name}.pt"))
             sharp_reconstructed = torch.load(os.path.join(f"{slide_type}-experiments", experiment_name,
-                                                          f"reconstructed_sharp_{experiment_name}.pt"),
-                                             map_location="cpu")
-            sharp_ground_truth = torch.load(os.path.join(f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"),
-                                            map_location="cpu")
+                                                          f"reconstructed_sharp_{experiment_name}.pt"))
+            sharp_ground_truth = torch.load(os.path.join(f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
             interpolated_codes = generate_interpolations_test(latent_codes)
         except FileNotFoundError:
             logger.info("Encoding inputs...")
             pl.seed_everything(42)
             torch.backends.cudnn.determinstic = True
             torch.backends.cudnn.benchmark = False
-            ckpt_path = os.path.join(dir_path, "checkpoints", "lightning_logs", f"version_{vnum}", "checkpoints",
-                                     f"epoch={epoch}-step={step}.ckpt")
+            if checkpoint_dir:
+                ckpt_path = os.path.join(checkpoint_dir, os.listdir(checkpoint_dir)[0])
+                logger.log(f"Checkpoint path: {ckpt_path}")
+            else:
+                ckpt_path = os.path.join("checkpoints", "lightning_logs", f"version_{vnum}", "checkpoints",
+                                         f"epoch={epoch}-step={step}.ckpt")
             ae = AE().load_from_checkpoint(ckpt_path)
+            ae.set_model_type(model_type)
             ae.eval()
             logger.info("Performing blur synthesis...")
             latent_codes, interpolated_codes, generated_images, reconstructed_images = perform_blurring(ae, images_gt,
@@ -143,6 +146,8 @@ def compute_metrics(experiment_name, slide_type, logger, vnum=None, epoch=None, 
         logger.info(f"FFL (generated vs reconstructed) {ffl_gen_vs_rec}")
         lds = compute_lds(latent_codes, interpolated_codes)
         logger.info(f"LDS (original vs. interpolated latent codes) = {lds}")
+        lds_v2 = compute_lds_v2(latent_codes)
+        logger.info(f"LDS-new = {lds_v2}")
         apd = compute_apd(latent_codes, interpolated_codes)
         logger.info(f"APD (original vs. interpolated latent codes) = {apd}")
         psnr_gen_vs_rec = eval_psnr(generated_images, reconstructed_images)
@@ -208,8 +213,11 @@ if __name__ == "__main__":
     # parser.add_argument("-step", default=None)
     #
     # args = parser.parse_args()
-    logger = init_logger("w1", "strong_w1")  # init_logger(args.experiment)
+
+    exp_name = "w1-baseline"
+
+    logger = init_logger("w1", exp_name)  # init_logger(args.experiment)
     # compute_metrics(args.experiment, args.slide_type, logger, args.vnum, args.epoch, args.step)
-    compute_metrics("strong_w1", "w1", logger, 2, 29, 7080)
+    compute_metrics(exp_name, "w1", logger, "weak",  vnum=2276747, epoch=39, step=9440)
     # test(args.experiment, args.slide_type)
-    test("strong_w1", "w1")
+    test(exp_name, "w1")

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+#SBATCH --partition=gpu
+#SBARCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --job-name=install_venv_im
+#SBATCH --time=01:00:00
+#SBATCH --output=slurm_output_%A.out
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=ioana.mazilu@student.uva.nl
+
+module load 2022
+module load Anaconda3/2022.05
+
+cd $HOME/defocus_blur
+conda create -n defocus_blur_venv python=3.10 anaconda
+conda env update --name defocus_blur_venv --file environment.yml --prune

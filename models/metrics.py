@@ -35,6 +35,36 @@ def compute_lds(encodings, interpolations):
     return result / img_cnt
 
 
+def compute_lds_v2(encodings):
+    """
+    Computes the LDS score: cosine similarity between the vectors obtained from zi-zi+1 and zi+1-zi+2
+    :param encodings: the latent codes of the original images.
+    :param interpolations: the latent codes of the original images obtained through linear interpolation.
+    :return: the LDS score for the set of given latent codes.
+    """
+    if len(encodings.shape) != 2:
+        encodings = encodings.reshape(encodings.shape[0], encodings.shape[1] * encodings.shape[2] * encodings.shape[3])
+    img_cnt = len(encodings) // TRANSITION_LENGTH
+    cos_sim = torch.nn.CosineSimilarity(dim=-1)
+    mse_loss = torch.nn.MSELoss(reduction="none")
+    result = 0
+    for i in range(0, len(encodings), TRANSITION_LENGTH):
+        # iterate over each set of TRANSITION_LENGTH latent representations corresponding to one image and compute the
+        # average pairwise cosine similarity between an interpolated latent code and its corresponding original latent code
+        transition_sum = 0
+        oe = encodings[i:i + TRANSITION_LENGTH]
+        diff = []
+        for j in range(TRANSITION_LENGTH-1):
+            diff.append(mse_loss(oe[j], oe[j+1]))
+        try:
+            for pair_idx in range(len(diff)-1):
+                transition_sum += cos_sim(diff[pair_idx], diff[pair_idx+1]).item()
+        except IndexError:
+            print("debug here")
+        result += transition_sum / (TRANSITION_LENGTH-2)
+    return result / img_cnt
+
+
 def compute_apd(encodings, interpolations):
     """
     Computed the APD score for a set of latent representations, as defined in the paper.

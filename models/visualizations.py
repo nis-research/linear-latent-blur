@@ -1,3 +1,4 @@
+import traceback
 from itertools import chain
 from torch import Tensor
 from torchvision.utils import make_grid, save_image
@@ -139,10 +140,10 @@ def deblur_visualisations_vary_alpha(exp_name, slide_type, img_idx):
             for i in img_range:
                 to_viz.append(img_tensors[i])
         grid = make_grid(torch.stack(to_viz, dim=0), nrow=TRANSITION_LENGTH-2)
-        save_image(grid, f"deblur_{exp_name}-img{img_idx}.png")
-        return
-    except FileNotFoundError:
-        print(f"File not found for {exp_name}")
+        os.makedirs(os.path.join("deblurring_examples", exp_name), exist_ok=True)
+        save_image(grid, os.path.join("deblurring_examples", exp_name, f"img{img_idx}.png"))
+    except FileNotFoundError as e:
+        print(f"File not found for {exp_name}. Error: {traceback.print_exc()}")
 
 
 def process_encodings(encodings, save_to):
@@ -223,3 +224,9 @@ def plot_embeddings(embeddings, save_to, colors, plot_axes_limits):
         plt.ylim(plot_axes_limits[2], plot_axes_limits[3])
     plt.savefig(save_to)
     plt.close()
+
+
+if __name__ == "__main__":
+    for image_idx in range(100):
+        deblur_visualisations_vary_alpha("w1-baseline", "w1", image_idx)
+        deblur_visualisations_vary_alpha("w1-indirect-reg", "w1", image_idx)

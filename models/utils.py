@@ -1,10 +1,20 @@
+import logging
 import torch
 import os
-
 import torchvision.utils
 from torchvision.utils import save_image
 from sklearn.decomposition import PCA
 from config import TRANSITION_LENGTH, STD_W1, MEAN_W1, MEAN_W2, STD_W2, NORMALIZE_IMAGES
+
+
+def init_logger(experiment_name):
+    test_logger = logging.getLogger(f"{experiment_name}_logger")
+    test_logger.setLevel(logging.DEBUG)
+    os.makedirs("logs", exist_ok=True)
+    f_handler = logging.FileHandler(os.path.join("logs", f"{experiment_name}.log"))
+    f_handler.setLevel(logging.DEBUG)
+    test_logger.addHandler(f_handler)
+    return test_logger
 
 
 def merge_batch_crops(images):
@@ -22,7 +32,7 @@ def prepare_batch(batch, pretrain=False):
     return merge_batch_crops(left), merge_batch_crops(right), merge_batch_crops(target)
 
 
-def generate_interpolations_test(encodings, steps=TRANSITION_LENGTH-1):
+def generate_interpolations_test(encodings, steps=TRANSITION_LENGTH - 1):
     """
     Generates interpolated image representations by linearly traversing the latent space between two given latent codes.
     Generates `steps`-1 representations.
@@ -148,5 +158,3 @@ def project_encodings_to_2d(encodings):
         encodings = encodings.numpy()
     pca = PCA(n_components=2, random_state=42)
     return pca.fit_transform(encodings)
-
-
