@@ -4,6 +4,8 @@ Paper can be [found](http) here.
 
 #### Introduction
 
+![architecture](samples/architecture.png)
+
 ![sample](samples/deblur-progression-new.png)
 #### Installation 
 * Requirements
