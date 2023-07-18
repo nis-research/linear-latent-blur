@@ -3,10 +3,10 @@
 Paper can be [found](http) here.
 
 #### Introduction
+<img src="samples/architecture.png" width = "500">
 
-![architecture](samples/architecture.png)
+<img src="samples/deblur-progression-new.png" width="800">
 
-![sample](samples/deblur-progression-new.png)
 #### Installation 
 * Requirements
 * [Dataset](https://bbbc.broadinstitute.org/BBBC006)
