@@ -4,7 +4,7 @@ Paper can be [found](http) here.
 
 #### Introduction
 
-
+![sample](samples/deblur-progression-new.png)
 #### Installation 
 * Requirements
 * [Dataset](https://bbbc.broadinstitute.org/BBBC006)
