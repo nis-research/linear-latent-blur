@@ -65,4 +65,10 @@ Paper can be [found](http) here.
   ```
   Replace the arguments accordingly. The last 3 arguments are optional and must be provided only when an experiment has not been tested before. Check `test.py` for more information on how the code can be used to test various properties of the models / generate visualizations.
 
+## Citation
+
+```
+@misc{
+}
+```
 
