@@ -3,8 +3,13 @@
 Paper can be [found](http) here.
 
 #### Introduction
-<img src="samples/architecture.png" width = "500">
+We propose a method that can deblur images as well as synthesize defocus blur. We train autoencoders with implicit and explicit regularization techniques to enforce
+linearity relations among the representations of different blur levels in the latent space. This allows for the exploration of different blur levels of an
+object by linearly interpolating/extrapolating the latent representations of images taken at different focal planes. Compared to existing works, we use a simple architecture to synthesize images with flexible blur levels, leveraging the linear latent space. Our regularized autoencoders can effectively mimic blur and deblur, increasing data variety as a data augmentation technique and improving the quality of microscopic images, which would be beneficial for further processing and analysis. 
 
+<p align="center"><img src="samples/architecture.png" width = "500" ></p>
+
+Examples of deblurred images:
 <img src="samples/deblur-progression-new.png" width="800">
 
 #### Installation 
@@ -60,7 +65,7 @@ Paper can be [found](http) here.
 * Test models
   * Run the command
   ```
-  `pytohn test.py -experiment="some_name --slide-type="some_type" [-vnum=0 -epoch=0 step=0]
+  pytohn test.py -experiment="some_name --slide-type="some_type" [-vnum=0 -epoch=0 step=0]
 
   ```
   Replace the arguments accordingly. The last 3 arguments are optional and must be provided only when an experiment has not been tested before. Check `test.py` for more information on how the code can be used to test various properties of the models / generate visualizations.
