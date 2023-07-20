@@ -1,10 +1,20 @@
+import logging
 import torch
 import os
-
 import torchvision.utils
 from torchvision.utils import save_image
 from sklearn.decomposition import PCA
 from config import TRANSITION_LENGTH, STD_W1, MEAN_W1, MEAN_W2, STD_W2, NORMALIZE_IMAGES
+
+
+def init_logger(experiment_name):
+    test_logger = logging.getLogger(f"{experiment_name}_logger")
+    test_logger.setLevel(logging.DEBUG)
+    os.makedirs("logs", exist_ok=True)
+    f_handler = logging.FileHandler(os.path.join("logs", f"{experiment_name}.log"))
+    f_handler.setLevel(logging.DEBUG)
+    test_logger.addHandler(f_handler)
+    return test_logger
 
 
 def merge_batch_crops(images):
@@ -22,7 +32,7 @@ def prepare_batch(batch, pretrain=False):
     return merge_batch_crops(left), merge_batch_crops(right), merge_batch_crops(target)
 
 
-def generate_interpolations_test(encodings, steps=TRANSITION_LENGTH-1):
+def generate_interpolations_test(encodings, steps=TRANSITION_LENGTH - 1):
     """
     Generates interpolated image representations by linearly traversing the latent space between two given latent codes.
     Generates `steps`-1 representations.
@@ -38,8 +48,12 @@ def generate_interpolations_test(encodings, steps=TRANSITION_LENGTH-1):
         interpolations.append(enc_left)
         alpha = 1 / steps
         while alpha < 1:
+            # if alpha == 1/8:  # fixme: delete this later
+            #     alpha = 1/10
             interp = (1 - alpha) * enc_left + alpha * enc_right
             interpolations.append(interp)
+            # if alpha == 1/10:  # fixme: delete this later
+            #     alpha = 1/8
             alpha += 1 / steps
         interpolations.append(enc_right)
     interpolations = torch.stack(interpolations, dim=0)
@@ -56,9 +70,15 @@ def interpolate_for_deblur(left_encodings, right_encodings, alphas):
     :return: a tensor with interpolated latent representations corresponding to sharp images
     """
     interpolations = []
+    print(alphas)
     for i in range(len(alphas)):
+        # interpolations.append(
+        #     1 / (1 - alphas[i]) * right_encodings[i] - ((alphas[i]) / (1 - alphas[i])) * left_encodings[i])
+        inverted_alpha = 1-alphas[i]
+        # if inverted_alpha == 1/8:  # fixme: delete this later
+        #     inverted_alpha = 1/10
         interpolations.append(
-            1 / (1 - alphas[i]) * right_encodings[i] - ((alphas[i]) / (1 - alphas[i])) * left_encodings[i])
+            (1 / inverted_alpha) * right_encodings[i] - ((1-inverted_alpha) / inverted_alpha) * left_encodings[i])
     return torch.stack(interpolations, dim=0)
 
 
@@ -76,7 +96,7 @@ def denormalize_image(image, experiment_name):
     # return image * STD_W1 + MEAN_W1 if "w1" in experiment_name else image * STD_W2 + MEAN_W2
 
 
-def create_img_folder(reconstructions, exp_name, slide_type, interpolated=False):
+def create_img_folder(reconstructions, exp_name, slide_type, interpolated=False, save_to=None):
     """
     Creates a folder and saves to its location the given images (`reconstructions`).
     :param reconstructions: the images to be saved in the created folder.
@@ -88,10 +108,13 @@ def create_img_folder(reconstructions, exp_name, slide_type, interpolated=False)
         dir_name = f"{exp_name}-interpolated"
     else:
         dir_name = f"{exp_name}-original"
-    os.makedirs(os.path.join(f"{slide_type}-experiments", exp_name, dir_name), exist_ok=True)
+    if save_to:
+        os.makedirs(os.path.join(save_to, f"{slide_type}-experiments", exp_name, dir_name), exist_ok=True)
+    else:
+        os.makedirs(os.path.join(save_to, f"{slide_type}-experiments", exp_name, dir_name), exist_ok=True)
     for idx, reconstr in enumerate(reconstructions):
         reconstr = reconstr if not NORMALIZE_IMAGES else denormalize_image(reconstr, exp_name)
-        save_image(reconstr, os.path.join(f"{slide_type}-experiments", exp_name, dir_name, f"{idx}.png"))
+        save_image(reconstr, os.path.join(save_to, f"{slide_type}-experiments", exp_name, dir_name, f"{idx}.png"))
 
 
 def orig_and_interp(experiment_name, slide_type):
@@ -148,5 +171,3 @@ def project_encodings_to_2d(encodings):
         encodings = encodings.numpy()
     pca = PCA(n_components=2, random_state=42)
     return pca.fit_transform(encodings)
-
-

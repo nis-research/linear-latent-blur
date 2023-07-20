@@ -1,3 +1,4 @@
+import traceback
 from itertools import chain
 from torch import Tensor
 from torchvision.utils import make_grid, save_image
@@ -10,39 +11,51 @@ import torch
 from models.utils import project_encodings_to_2d
 
 
-def _read_latent_codes(experiment_name, slide_type):
-    return torch.load(os.path.join(f"{slide_type}-experiments", experiment_name, f"latent_codes_{experiment_name}-"
-                                                                                 f"{slide_type}.pt"), map_location="cpu")
+def _read_latent_codes(experiment_name, slide_type, output_path=""):
+    return torch.load(os.path.join(output_path, f"{slide_type}-experiments",
+                                   experiment_name, f"latent_codes_{experiment_name}.pt"),
+                      map_location="cpu")
 
 
 def read_from_file(filename):
     return torch.load(filename, map_location="cpu")
 
 
-def visualize_2d_projections(img_idx, slide_type):
+def visualize_2d_projections(img_idx, slide_type, output_path=""):
     """
-    Creates a plot of the 2D projected latent representations of z0 to z16 corresponding to the chosen image.
-    *Used to generate image displayed in the paper.*
+    ** Used to generate Fig. 3 - 2D latent representations of a cell slide in the paper. **
+    Creates a plot of the 2D-projected latent representations of different blur levels (z-stack 0 through z-stack 16)
+    corresponding to one cell slide.
+
     :param img_idx: the index of the image to be used
     :param slide_type: the type of slides to which the image belongs
     """
-    enc_baseline = project_encodings_to_2d(_read_latent_codes("baseline-64-1024", slide_type))
-    enc_weak = project_encodings_to_2d(_read_latent_codes("weak-64-1024", slide_type))
-    enc_strong = project_encodings_to_2d(_read_latent_codes("strong-64-1024", slide_type))
+    enc_baseline = project_encodings_to_2d(_read_latent_codes(f"{slide_type}-baseline", slide_type, output_path))
+    enc_indirect = project_encodings_to_2d(_read_latent_codes(f"{slide_type}-indirect", slide_type, output_path))
+    enc_direct = project_encodings_to_2d(_read_latent_codes(f"{slide_type}-direct", slide_type, output_path))
     markers = ["o", "v", "s"]
     colors = ["blue", "red", "green", "purple", "yellow", "pink", "violet", "orange", "brown", "grey", "black"]
-    encodings = [enc_baseline, enc_weak, enc_strong]
-    models = ["baseline", "weak", "strong"]
+    encodings = [enc_baseline, enc_indirect, enc_direct]
+    models = ["baseline", "indirect", "direct"]
+    fig, ax = plt.subplots()
     for idx, enc in enumerate(encodings):
-        enc = enc[img_idx*TRANSITION_LENGTH:img_idx*TRANSITION_LENGTH+TRANSITION_LENGTH]
-        plt.scatter(enc[:, 0], enc[:, 1], c=colors[idx], alpha=0.5, label=models[idx], marker=markers[idx])
+        enc = enc[img_idx * TRANSITION_LENGTH:img_idx * TRANSITION_LENGTH + TRANSITION_LENGTH]
+        ax.scatter(enc[:, 0], enc[:, 1], c=colors[idx], alpha=0.5, label=models[idx], marker=markers[idx])
         # mark the linear path between latent codes of z0 and z16 with a dashed line
-        plt.plot([enc[0, 0], enc[-1,0]], [enc[0,1], enc[-1,1]], color=colors[idx], marker=markers[idx],
+        ax.plot([enc[0, 0], enc[-1, 0]], [enc[0, 1], enc[-1, 1]], color=colors[idx], marker=markers[idx],
                  linestyle='dashed', alpha=0.2)
-    plt.legend()
-    save_to = os.path.join(f"{slide_type}-experiments")
-    plt.savefig(os.path.join(save_to, f"2D-projections-{slide_type}-{img_idx}.png"))
-    plt.close()
+        # annotate z0, a8 and z16
+        for zstack, zstack_lbl in zip([0, 4, 8], ["z0", "z8", "z16"]):
+            ax.annotate(zstack_lbl, (enc[zstack, 0], enc[zstack, 1]), fontsize="x-small")
+
+    fig.legend()
+    if output_path:
+        save_to = os.path.join(output_path, f"{slide_type}-experiments", "2D_projections_comparison")
+        os.makedirs(save_to, exist_ok=True)
+    else:
+        save_to = os.path.join(f"{slide_type}-experiments")
+    fig.savefig(os.path.join(save_to, f"{img_idx}.png"))
+    # fig.close()
 
 
 def create_transition_directories(experiment_name: str, images: Tensor, slide_type):
@@ -60,89 +73,167 @@ def create_transition_directories(experiment_name: str, images: Tensor, slide_ty
                                            f"transition-{experiment_name}-{idx}", f"original_z{zs * 2}.tif"))
 
 
-def grid_comparison_reconstructions(img_idx, slide_type, interpolated=False):
+def grid_comparison_reconstructions(img_idx, slide_type, interpolated=False, output_path=""):
     """
-    For a given image, generate a grid showing a transition from z0 to z16, with 4 rows: original images,
-    reconstructions with the baseline, weak and strong regularization.
-    :param img_idx: the idx of the image to be used for the grid
-    :param slide_type: the type of slide to which the image belongs
-    :param interpolated: if the grid should show reconstructions from original or interpolated latent representations
+    ** Used to generate Fig. 4(a) in the paper. **
+    For a given image, generate a grid showing a transition from z-stack 0 to z-stack 16, with 4 rows: real images on
+    the first row, reconstructions with the baseline, indirectly and directly regularized models on the following rows.
+    The reconstructions can come from latent codes obtained by encoding the real images or from latent codes obtained
+    from linear interpolation between other latent codes. This is controlled with the `interpolated` argument.
+
+    :param img_idx: the idx of the image to be used for the grid.
+    :param slide_type: the type of slide to which the image belongs.
+    :param interpolated: if the grid should show reconstructions from original or linearly interpolated latent
+     representations.
     """
     file_extension = "png"  # "pdf", "eps"
-    models = [f"baseline-64-1024-{slide_type}", f"weak-64-1024-{slide_type}", f"strong-64-1024-{slide_type}"]
+    models = [f"{slide_type}-baseline", f"{slide_type}-indirect", f"{slide_type}-direct"]
     images, _, _ = ds.test_images(slide_type)
+    # select only the images (blur levels) associated with the cell slide with index `img_idx`
     to_viz = [images[img_idx * TRANSITION_LENGTH:img_idx * TRANSITION_LENGTH + TRANSITION_LENGTH]]
+    save_to = os.path.join(output_path, f"{slide_type}-experiments", "gt_vs_synthetic_blur")
+    # directory for saving a 1-row grid with the real blur levels of the cell slide
+    os.makedirs(os.path.join(save_to, "gt_blur"), exist_ok=True)
+    # directory for saving several 1-row grids with the synthetic blur levels of the cell slide, using the 3 models
+    # one 1-row grid per model is generated
+    os.makedirs(os.path.join(save_to, "synthetic_blur"), exist_ok=True)
+    # save a grid of the transition from sharp to blurry with the real images
+    grid = make_grid(to_viz, nrow=TRANSITION_LENGTH)
+    save_image(grid, os.path.join(save_to, "gt_blur", f"gt_img{img_idx}.{file_extension}"))
     for model in models:
+        path_to = os.path.join(output_path, f"{slide_type}-experiments", model)
         if not interpolated:
-            reconstr = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"reconstructed_blur_{model}.pt"))
+            reconstr = read_from_file(os.path.join(path_to, f"reconstructed_blur_{model}.pt"))
         else:
-            reconstr = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"generated_blur_{model}.pt"))
+            reconstr = read_from_file(os.path.join(path_to, f"synthesised_blur_{model}.pt"))
         to_viz.append(reconstr[img_idx * TRANSITION_LENGTH:img_idx * TRANSITION_LENGTH + TRANSITION_LENGTH])
+        grid = make_grid(reconstr[img_idx * TRANSITION_LENGTH:img_idx * TRANSITION_LENGTH + TRANSITION_LENGTH],
+                         nrow=TRANSITION_LENGTH)
+        if not interpolated:
+            save_image(grid, os.path.join(save_to, "gt_blur", f"{model}_img{img_idx}.{file_extension}"))
+        else:
+            save_image(grid, os.path.join(save_to, "synthetic_blur", f"{model}_img{img_idx}.{file_extension}"))
+    # save one 4-row grid as well from the 1-row grids generated above
     grid = make_grid(torch.cat(to_viz, dim=0), nrow=TRANSITION_LENGTH)
     if not interpolated:
-        save_image(grid, os.path.join(f"{slide_type}-experiments", f"Comparison reconstructions for {slide_type} "
-                                                                   f"img{img_idx}.{file_extension}"))
+        save_image(grid, os.path.join(save_to, f"{slide_type}_img{img_idx}_gt_blur.{file_extension}"))
     else:
-        save_image(grid, os.path.join(f"{slide_type}-experiments", f"Comparison interpolated reconstructions for "
-                                                                   f"{slide_type} img{img_idx}.{file_extension}"))
+        save_image(grid, os.path.join(save_to, f"{slide_type}_img{img_idx}_synthetic_blur.{file_extension}"))
 
 
-def deblur_fixed_alpha(slide_type, alpha, img_idx):
+def deblur_fixed_alpha(slide_type, alpha, img_idx, output_path=""):
     """
-    Generates a grid to visualize how the chosen models deblur the same image, using the same alpha parameter.
-    :param slide_type: what type of slide is the image
-    :param alpha: the interpolation parameter used for the deblurring
-    :param img_idx: the index of the z0 version of the image to be deblurred
+    ** Used to generate Fig. 4(c) in the paper. **
+    Generates a 3-row grid to visualize how the 3 models synthesize a sharp image starting from the same input pair
+    and using the same interpolation parameter alpha. Each row contains: a pair of input images, the synthetic sharp
+    image, the sharp image as reconstructed by the model from its associated (non-interpolated) latent code and the real
+    sharp image.
+    :param slide_type: what type of slide the image is (w1 or w2).
+    :param alpha: the interpolation parameter used for the deblurring.
+    :param img_idx: the index of the zstack-0 version of the cell slide to be deblurred.
     """
-    alpha_range = [*range(1/(TRANSITION_LENGTH-1), 1, 1/(TRANSITION_LENGTH-1))]
+    # alpha_range = [*range(1 / (TRANSITION_LENGTH - 1), 1, 1 / (TRANSITION_LENGTH - 1))]
+    alpha_range = list(map(lambda val: val / (TRANSITION_LENGTH-1), [*range(1, (TRANSITION_LENGTH-2) + 1)]))
     # there are 154 test images for w1 slides and 153 for w2 slides
     img_range = [*range(img_idx, 1078, 154)] if slide_type == "w1" else [*range(img_idx, 1071, 153)]
-    models = [f"baseline-64-1024-{slide_type}", f"weak-64-1024-{slide_type}", f"strong-64-1024-{slide_type}"]
+    models = [f"{slide_type}-baseline", f"{slide_type}-indirect", f"{slide_type}-direct"]
     to_viz = []
     alpha_dict = dict(zip(alpha_range, img_range))
     i = alpha_dict[alpha]
-    sharp_gt = read_from_file(os.path.join(f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
+    sharp_gt = read_from_file(os.path.join(output_path, f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
+    # save a 1-row grid per model type
     for model in models:
+        path_to = os.path.join(output_path, f"{slide_type}-experiments", model)
         try:
-            generated_sharp = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"generated_sharp_{model}.pt"))
-            reconstructed_sharp = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"reconstructed_sharp_{model}.pt"))
-            left_rec = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"left_rec_by_{model}.pt"))
-            right_rec = read_from_file(os.path.join(f"{slide_type}-experiments", model, f"right_rec_by_{model}.pt"))
+            generated_sharp = read_from_file(os.path.join(path_to, f"generated_sharp_{model}.pt"))
+            reconstructed_sharp = read_from_file(os.path.join(path_to, f"reconstructed_sharp_{model}.pt"))
+            left_rec = read_from_file(os.path.join(path_to, f"left_rec_by_{model}.pt"))
+            right_rec = read_from_file(os.path.join(path_to, f"right_rec_by_{model}.pt"))
             to_viz.extend([left_rec[i], right_rec[i], generated_sharp[i], reconstructed_sharp[i], sharp_gt[i]])
-        except FileNotFoundError:
-            print("File not found")
-    img_grid = make_grid(to_viz, nrow=5)
-    save_image(img_grid, os.path.join(f"{slide_type}-experiments", f"deblur-model-comparison-{slide_type}-alpha-{alpha}-img{img_idx}.png"))
+            model_grid = make_grid([left_rec[i], right_rec[i], generated_sharp[i], reconstructed_sharp[i], sharp_gt[i]],
+                             nrow=5)
+            save_image(model_grid, os.path.join(output_path, f"{slide_type}-experiments",
+                                              f"deblur-model-comparison-{model}-alpha-{alpha}-img{img_idx}.png"))
+        except FileNotFoundError as e:
+            print(e)
+    # save a 3-row grid using the 1-row grids generated above
+    img_grid = make_grid(torch.stack(to_viz, dim=0), nrow=5)
+    save_image(img_grid, os.path.join(output_path, f"{slide_type}-experiments",
+                                      f"deblur-model-comparison-{slide_type}-alpha-{alpha}-img{img_idx}.png"))
 
 
-def deblur_visualisations_vary_alpha(exp_name, slide_type, img_idx):
+def deblur_visualisations_vary_alpha(exp_name, slide_type, img_idx, output_path=""):
     """
-    Generates a grid to visualize how the same target image is deblurred using different alpha parameters,
-    by the chosen model.
+    ** Generates Fig. 5 in the paper. **
+    Generates a 5-row grid to show how using different alpha parameters and input pairs affects the synthetic sharp
+    image, using a specified model (based on the experiment name).
+    The rows in the grid correspond to: input pair (first 2 rows), synthetic sharp image, reconstructed sharp image and
+    real sharp image. The columns correspond to different input pairs, where one image is fixed at z-stack 0 and the
+    other varies from z-stack 2 to z-stack 14 (from blurry to sharper).
+
+    :param expe_name: the name of the experiment (model)
+    :param slide_type: the type of slide to which the image belongs
+    :param img_idx: the idx of the cell slide to be used for the grid
+    """
+    try:
+        sharp_gt = read_from_file(
+            os.path.join(output_path, f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
+        generated_sharp = read_from_file(
+            os.path.join(output_path, f"{slide_type}-experiments", exp_name, f"generated_sharp_{exp_name}.pt"))
+        reconstructed_sharp = read_from_file(
+            os.path.join(output_path, f"{slide_type}-experiments", exp_name, f"reconstructed_sharp_{exp_name}.pt"))
+        left_rec = read_from_file(os.path.join(output_path, f"{slide_type}-experiments", exp_name,
+                                               f"left_rec_by_{exp_name}.pt"))
+        right_rec = read_from_file(os.path.join(output_path, f"{slide_type}-experiments", exp_name,
+                                                f"right_rec_by_{exp_name}.pt"))
+        images = [left_rec, right_rec, generated_sharp, reconstructed_sharp, sharp_gt]
+        to_viz = []
+        img_range = [*range(img_idx, 1078, 154)] if slide_type == "w1" else [*range(img_idx, 1071, 153)]
+        for img_tensors in images:
+            for i in img_range:
+                to_viz.append(img_tensors[i])
+        grid = make_grid(torch.stack(to_viz, dim=0), nrow=TRANSITION_LENGTH - 2)
+        os.makedirs(os.path.join(output_path, f"{slide_type}-experiments", "deblurring_examples", exp_name), exist_ok=True)
+        save_image(grid, os.path.join(output_path, f"{slide_type}-experiments", "deblurring_examples", exp_name,
+                                      f"img{img_idx}.png"))
+    except FileNotFoundError as e:
+        print(f"File not found for {exp_name}. Error: {traceback.print_exc()}")
+
+
+def deblur_visualisations_vary_alpha_transposed(exp_name, slide_type, img_idx, output_path=""):
+    """
+    Generates the same plot as `deblur_visualisations_vary_alpha()`, bur transposed.
+    Generates a grid to visualize how using different alpha parameters and input pairs affects the synthetic sharp
+    image, using a specified model (based on the experiment name).
+
     :param expe_name: the name of the experiment (model)
     :param slide_type: the type of slide to which the image belongs
     :param img_idx: the idx of the image to be used for the grid
     """
     try:
-        sharp_gt = read_from_file(os.path.join(f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
+        sharp_gt = read_from_file(
+            os.path.join(output_path, f"{slide_type}-experiments", f"deblurred_gt_{slide_type}.pt"))
         generated_sharp = read_from_file(
-            os.path.join(f"{slide_type}-experiments", exp_name, f"generated_sharp_{exp_name}.pt"))
+            os.path.join(output_path, f"{slide_type}-experiments", exp_name, f"generated_sharp_{exp_name}.pt"))
         reconstructed_sharp = read_from_file(
-            os.path.join(f"{slide_type}-experiments", exp_name, f"reconstructed_sharp_{exp_name}.pt"))
-        left_rec = read_from_file(os.path.join(f"{slide_type}-experiments", exp_name, f"left_rec_by_{exp_name}.pt"))
-        right_rec = read_from_file(os.path.join(f"{slide_type}-experiments", exp_name, f"right_rec_by_{exp_name}.pt"))
+            os.path.join(output_path, f"{slide_type}-experiments", exp_name, f"reconstructed_sharp_{exp_name}.pt"))
+        left_rec = read_from_file(os.path.join(output_path, f"{slide_type}-experiments", exp_name,
+                                               f"left_rec_by_{exp_name}.pt"))
+        right_rec = read_from_file(os.path.join(output_path, f"{slide_type}-experiments", exp_name,
+                                                f"right_rec_by_{exp_name}.pt"))
         images = [left_rec, right_rec, generated_sharp, reconstructed_sharp, sharp_gt]
-        to_viz = []
-        # TODO: probably the line below needs to be updated with new values
         img_range = [*range(img_idx, 1078, 154)] if slide_type == "w1" else [*range(img_idx, 1071, 153)]
-        for img_tensors in images:
-            for i in img_range:
+        for i in img_range:
+            to_viz = []
+            for img_tensors in images:
                 to_viz.append(img_tensors[i])
-        grid = make_grid(torch.stack(to_viz, dim=0), nrow=TRANSITION_LENGTH-2)
-        save_image(grid, f"deblur_{exp_name}-img{img_idx}.png")
-        return
-    except FileNotFoundError:
-        print(f"File not found for {exp_name}")
+            grid = make_grid(torch.stack(to_viz, dim=0), nrow=len(to_viz))
+            os.makedirs(os.path.join(output_path, f"{slide_type}-experiments", "deblurring_examples_transposed",
+                                     exp_name), exist_ok=True)
+            save_image(grid, os.path.join(output_path, f"{slide_type}-experiments", "deblurring_examples_transposed",
+                                          exp_name, f"img{img_idx}-{i}.png"))
+    except FileNotFoundError as e:
+        print(f"File not found for {exp_name}. Error: {traceback.print_exc()}")
 
 
 def process_encodings(encodings, save_to):
@@ -154,14 +245,15 @@ def process_encodings(encodings, save_to):
     :param save_to: the location where the plots are saved
     :return:
     """
-    encodings_reduced = project_encodings_to_2d(encodings)  # apply PCA to project the latent representations to a 2D space
+    # apply PCA to project the latent representations to a 2D space
+    encodings_reduced = project_encodings_to_2d(encodings)
     min_x, max_x = np.min(encodings_reduced[:, 0]), np.max(encodings_reduced[:, 0])
     min_y, max_y = np.min(encodings_reduced[:, 1]), np.max(encodings_reduced[:, 1])
     # Generate 2D plots of the latent representations, where each plot displays the encodings of 1 image
     # (its `TRANSITION_LENGTH` transitions from z0 to z16)
     generate_plots(encodings_reduced, TRANSITION_LENGTH, save_to, [min_x, max_x, min_y, max_y])
     # generate a 2D plot of all the latent representations
-    generate_plots(encodings_reduced, None, save_to, None)
+    # generate_plots(encodings_reduced, None, save_to, None)
 
 
 def generate_plots(encodings, images_per_plot, save_to, plot_axes_limits=None, slide_type=None):
@@ -186,7 +278,8 @@ def generate_plots(encodings, images_per_plot, save_to, plot_axes_limits=None, s
     if images_per_plot is None:
         # create a plot with all the given latent codes
         save_to = os.path.join(save_to_dir, scatter_name + f"original_latent_codes.png")
-        colors = list(chain.from_iterable([[i] * TRANSITION_LENGTH for i in range(img_cnt//9)]))  # unique color for each image
+        colors = list(
+            chain.from_iterable([[i] * TRANSITION_LENGTH for i in range(img_cnt // 9)]))  # unique color for each image
         plot_embeddings(enc_orig, save_to, colors, plot_axes_limits)
         save_to = os.path.join(save_to_dir, scatter_name + f"interpolated_latent_codes.png")
         plot_embeddings(enc_interp, save_to, colors, plot_axes_limits)
@@ -223,3 +316,9 @@ def plot_embeddings(embeddings, save_to, colors, plot_axes_limits):
         plt.ylim(plot_axes_limits[2], plot_axes_limits[3])
     plt.savefig(save_to)
     plt.close()
+
+
+if __name__ == "__main__":
+    for image_idx in range(100):
+        deblur_visualisations_vary_alpha("w1-baseline", "w1", image_idx)
+        deblur_visualisations_vary_alpha("w1-indirect", "w1", image_idx)

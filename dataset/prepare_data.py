@@ -147,12 +147,13 @@ def form_triplets(dir_name: str, triplets, slide_type, deblur=False):
 
 if __name__ == "__main__":
 
-    # rename_files("all", [*STACKS])
-    # split_images("all", [*STACKS])
-    #
-    # # a triplet is of the form: lower_blur_level, higher_blur_level, intermediate_blur_level, interpolation_param
+    rename_files("all", [*STACKS])
+    split_images("all", [*STACKS])
+
+    # a triplet is of the form: lower_blur_level, higher_blur_level, intermediate_blur_level, interpolation_param
     triplets_train = [(0, 16, 8, 0.5), (0, 8, 4, 0.5), (8, 16, 12, 0.5), (0, 4, 2, 0.5), (4, 8, 6, 0.5),
                       (8, 12, 10, 0.5), (12, 16, 14, 0.5)]
+
     # Prepare train-test-val sets for the w1 and w2 sets of images
     for mode in ["train", "val", "test"]:
         for slide_type in ["w1", "w2"]:
@@ -163,13 +164,12 @@ if __name__ == "__main__":
     # triplets_train = [(0, 16, 2, 1/8), (0, 16, 4, 2/8), (0, 16, 6, 3/8), (0, 16, 8, 4/8), (0, 16, 10, 5/8),
     #                   (0, 16, 12, 6/8), (0, 16, 14, 7/8)]
 
-    # Comment the lines below to generate a test set for deblurring
-    # For deblurring, fix left input to z-stack0, vary the others from z-stack2 to z-stack14
-    # triplets_deblur = [(0, 2, 16, 7/8), (0, 4, 16, 6/8), (0, 6, 16, 5/8), (0, 8, 16, 4/8), (0, 10, 16, 3/8),
-    #                   (0, 12, 16, 2/8), (0, 14, 16, 1/8)]
-    #
-    # # x = a * xl + (1-a)*xr =>  xr = 1/(1-a)*x - a/(1-a) xl
-    #
-    # for mode in ["test"]:
-    #     for slide_type in ["w1", "w2"]:
-    #         form_triplets(mode, triplets_deblur, slide_type, deblur=True)
+    # Uncomment the lines below to generate a test set for deblurring
+    # Fix left input to z-stack0, vary the others from z-stack2 to z-stack14
+    triplets_deblur = [(0, 2, 16, 7/8), (0, 4, 16, 6/8), (0, 6, 16, 5/8), (0, 8, 16, 4/8), (0, 10, 16, 3/8),
+                      (0, 12, 16, 2/8), (0, 14, 16, 1/8)]
+
+    # x = a * xl + (1-a)*xr =>  xr = 1/(1-a)*x - a/(1-a) xl
+    for mode in ["test"]:
+        for slide_type in ["w1", "w2"]:
+            form_triplets(mode, triplets_deblur, slide_type, deblur=True)
