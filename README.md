@@ -1,6 +1,6 @@
 ### Official website of 'Defocus Blur Synthesis and Deblurring via Interpolation and Extrapolation in Latent Space (Accepted at CAIP2023)'
 
-Paper can be [found](http) here.
+Paper can be [found](https://link.springer.com/chapter/10.1007/978-3-031-44240-7_20) here.
 
 #### Introduction
 We propose a method that can deblur images as well as synthesize defocus blur. We train autoencoders with implicit and explicit regularization techniques to enforce
